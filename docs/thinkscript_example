@@ -1,0 +1,107 @@
+# ORB Standard Strategy Elsa Victoria Gil Zapata
+declare upper;
+input n_candles = 10;         #hint n_candles: Number of 1-minute candles for initial range
+input target_multiplier = 2.0; #hint target_multiplier: Multiplier for targets
+input stop_addon = 0.25;      #hint stop_addon: Additional value added to the range for stop loss calculation
+input breakout_min = 0.20;    #hint breakout_min: Minimum distance required above/below range for signal
+
+# Line style inputs
+input range_line_width = 2;    #hint range_line_width: Width of range lines
+input target_line_width = 2;   #hint target_line_width: Width of target lines
+input stop_line_width = 2;     #hint stop_line_width: Width of stop lines
+
+def h = high;
+def l = low;
+def c = close;
+
+# Time definitions
+def market_open = SecondsFromTime(930) == 0;
+def range_end_minutes = 930 + n_candles;
+def within_range_period = if SecondsFromTime(930) >= 0 && SecondsFromTime(range_end_minutes) < 0 then 1 else 0;
+def before_10am = SecondsFromTime(0959) <= 0;
+
+# Track high and low during range period
+def temp_high = if within_range_period then
+                    if market_open then h
+                    else Max(h, temp_high[1])
+                else temp_high[1];
+
+def temp_low = if within_range_period then
+                   if market_open then l
+                   else Min(l, temp_low[1])
+               else temp_low[1];
+
+# Set final range values
+def is_range_end = SecondsFromTime(range_end_minutes) == 0;
+def range_high = if is_range_end then temp_high else if !IsNaN(range_high[1]) then range_high[1] else temp_high;
+def range_low = if is_range_end then temp_low else if !IsNaN(range_low[1]) then range_low[1] else temp_low;
+
+# Calculate the range of the last 5 one-minute candles
+def last_5min_high = Highest(high, 5);
+def last_5min_low = Lowest(low, 5);
+def last_5min_range = last_5min_high - last_5min_low;
+
+# Signal tracking with single signal per day
+def signal_type = CompoundValue(1,
+    if market_open then 0                                    # Reset at market open
+    else if signal_type[1] != 0 then signal_type[1]         # Keep previous signal if exists
+    else if c > range_high + breakout_min && SecondsFromTime(range_end_minutes) >= 0 && before_10am then 1  # Long signal
+    else if c < range_low - breakout_min && SecondsFromTime(range_end_minutes) >= 0 && before_10am then -1  # Short signal
+    else 0,                                                 # No signal
+    0);
+
+# Generate signals only on the first occurrence
+def long_signal = signal_type == 1 && signal_type[1] == 0;
+def short_signal = signal_type == -1 && signal_type[1] == 0;
+
+# Calculate entry prices and levels
+def long_entry_price = CompoundValue(1, if long_signal then close else long_entry_price[1], 0);
+def short_entry_price = CompoundValue(1, if short_signal then close else short_entry_price[1], 0);
+
+# Calculate stop and target levels
+def long_stop_level = CompoundValue(1, if long_signal then close - (last_5min_range + stop_addon) else long_stop_level[1], 0);
+def long_target_level = CompoundValue(1, if long_signal then close + (last_5min_range * target_multiplier) else long_target_level[1], 0);
+
+def short_stop_level = CompoundValue(1, if short_signal then close + (last_5min_range + stop_addon) else short_stop_level[1], 0);
+def short_target_level = CompoundValue(1, if short_signal then close - (last_5min_range * target_multiplier) else short_target_level[1], 0);
+
+# Strategy Orders
+AddOrder(OrderType.BUY_TO_OPEN, long_signal);
+AddOrder(OrderType.SELL_TO_CLOSE, high >= long_target_level);
+AddOrder(OrderType.SELL_TO_CLOSE, low <= long_stop_level);
+
+AddOrder(OrderType.SELL_TO_OPEN, short_signal);
+AddOrder(OrderType.BUY_TO_CLOSE, low <= short_target_level);
+AddOrder(OrderType.BUY_TO_CLOSE, high >= short_stop_level);
+
+# Plot range levels for reference
+plot RangeHigh = range_high;
+plot RangeLow = range_low;
+RangeHigh.SetDefaultColor(CreateColor(0, 0, 255));  # Blue
+RangeLow.SetDefaultColor(CreateColor(0, 0, 255));   # Blue
+RangeHigh.SetLineWeight(range_line_width);
+RangeLow.SetLineWeight(range_line_width);
+RangeHigh.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+RangeLow.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+
+# Plot stop and target levels
+plot LongStop = if signal_type == 1 then long_stop_level else Double.NaN;
+plot LongTarget = if signal_type == 1 then long_target_level else Double.NaN;
+plot ShortStop = if signal_type == -1 then short_stop_level else Double.NaN;
+plot ShortTarget = if signal_type == -1 then short_target_level else Double.NaN;
+
+# Set stop and target lines appearance
+LongStop.SetDefaultColor(CreateColor(255, 0, 0));    # Red
+LongTarget.SetDefaultColor(CreateColor(0, 255, 0));  # Green
+ShortStop.SetDefaultColor(CreateColor(255, 0, 0));   # Red
+ShortTarget.SetDefaultColor(CreateColor(0, 255, 0)); # Green
+
+LongStop.SetLineWeight(stop_line_width);
+LongTarget.SetLineWeight(target_line_width);
+ShortStop.SetLineWeight(stop_line_width);
+ShortTarget.SetLineWeight(target_line_width);
+
+LongStop.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+LongTarget.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+ShortStop.SetPaintingStrategy(PaintingStrategy.HORIZONTAL);
+ShortTarget.SetPaintingStrategy(PaintingStrategy.HORIZONTAL); 
